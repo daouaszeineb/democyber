@@ -28,3 +28,6 @@ jobs:
         with:
          name: gitleaks-report
          path: results.sarif
+
+      - name: Show image details
+        run: docker images $DOCKER_IMAGE_NAME
