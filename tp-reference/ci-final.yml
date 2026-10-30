@@ -1,0 +1,80 @@
+# FICHIER DE REFERENCE : version finale du pipeline.
+# A copier dans .github/workflows/ci.yml progressivement, etape par etape.
+name: CI-CD DevSecOps
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    env:
+      DOCKER_IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/democyber:latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ---------- PARTIE I : Gitleaks ----------
+      - name: Run Gitleaks scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Etape 3 : upload du rapport (if: always() pour l'avoir meme en cas d'echec)
+      - name: Upload Gitleaks report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-report
+          path: results.sarif
+
+      # ---------- PARTIE II - Etape 1 : Docker ----------
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build Docker image
+        run: docker build -t $DOCKER_IMAGE_NAME .
+
+      - name: Test Docker image locally
+        run: |
+          docker run -d --name democyber-test -p 8080:8080 $DOCKER_IMAGE_NAME
+          sleep 15
+          curl -f http://localhost:8080/actuator/health || (docker logs democyber-test && exit 1)
+          docker stop democyber-test
+          docker rm democyber-test
+
+      # ---------- PARTIE II - Etape 2 : Trivy ----------
+      - name: Trivy report (JSON)
+        uses: aquasecurity/trivy-action@0.20.0
+        with:
+          image-ref: ${{ env.DOCKER_IMAGE_NAME }}
+          format: 'json'
+          output: 'trivy-report.json'
+          exit-code: '0'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-report
+          path: trivy-report.json
+
+      - name: Scan Docker image with Trivy
+        uses: aquasecurity/trivy-action@0.20.0
+        with:
+          image-ref: ${{ env.DOCKER_IMAGE_NAME }}
+          format: 'table'
+          exit-code: '1'
+          severity: 'CRITICAL,HIGH'
+          # ignore-unfixed: true   # decommenter si Trivy bloque sur des failles sans correctif
+
+      # ---------- PARTIE III : Push ----------
+      - name: Push Docker image
+        run: docker push $DOCKER_IMAGE_NAME

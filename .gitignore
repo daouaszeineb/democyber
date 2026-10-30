@@ -1,0 +1,6 @@
+target/
+.vscode/
+.idea/
+*.class
+results.sarif
+trivy-report.json
